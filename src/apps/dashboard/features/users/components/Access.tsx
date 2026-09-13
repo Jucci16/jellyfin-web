@@ -1,4 +1,4 @@
-import type { BaseItemDto, DeviceInfoDto, UserDto } from '@jellyfin/sdk/lib/generated-client';
+import type { BaseItemDto, DeviceInfoDto, TunerHostInfo, UserDto, UserPolicy } from '@jellyfin/sdk/lib/generated-client';
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 
 import loading from 'components/loading/loading';
@@ -17,7 +17,18 @@ type ItemsArr = {
     Id?: string | null;
     AppName?: string | null;
     CustomName?: string | null;
+    Url?: string | null;
     checkedAttribute?: string
+};
+
+/**
+ * The server's UserPolicy has EnableAllTunerHosts/EnabledTunerHostIds fields that are not yet
+ * present in the published @jellyfin/sdk typings. This local extension can be dropped once the
+ * SDK is regenerated against a server build that includes them.
+ */
+type UserPolicyWithTunerHosts = UserPolicy & {
+    EnableAllTunerHosts?: boolean | null;
+    EnabledTunerHostIds?: string[] | null;
 };
 
 const Access = ({ userId }: AccessProps) => {
@@ -25,6 +36,7 @@ const Access = ({ userId }: AccessProps) => {
     const [channelsItems, setChannelsItems] = useState<ItemsArr[]>([]);
     const [mediaFoldersItems, setMediaFoldersItems] = useState<ItemsArr[]>([]);
     const [devicesItems, setDevicesItems] = useState<ItemsArr[]>([]);
+    const [tunerHostsItems, setTunerHostsItems] = useState<ItemsArr[]>([]);
     const libraryMenu = useMemo(async () => ((await import('scripts/libraryMenu')).default), []);
 
     const element = useRef<HTMLDivElement>(null);
@@ -133,13 +145,49 @@ const Access = ({ userId }: AccessProps) => {
         }
     }, []);
 
-    const loadUser = useCallback((user: UserDto, mediaFolders: BaseItemDto[], channels: BaseItemDto[], devices: DeviceInfoDto[]) => {
+    const loadTunerHosts = useCallback((user: UserDto, tunerHosts: TunerHostInfo[]) => {
+        const page = element.current;
+
+        if (!page) {
+            console.error('[userlibraryaccess] Unexpected null page reference');
+            return;
+        }
+
+        const policy = user.Policy as UserPolicyWithTunerHosts | undefined;
+        const itemsArr: ItemsArr[] = [];
+
+        for (const tunerHost of tunerHosts) {
+            const isChecked = policy?.EnableAllTunerHosts || policy?.EnabledTunerHostIds?.indexOf(tunerHost.Id || '') != -1;
+            const checkedAttribute = isChecked ? ' checked="checked"' : '';
+            itemsArr.push({
+                Id: tunerHost.Id,
+                Name: tunerHost.FriendlyName,
+                Url: tunerHost.Url,
+                checkedAttribute: checkedAttribute
+            });
+        }
+
+        setTunerHostsItems(itemsArr);
+
+        if (tunerHosts.length) {
+            (page.querySelector('.tunerHostAccessContainer') as HTMLDivElement).classList.remove('hide');
+        } else {
+            (page.querySelector('.tunerHostAccessContainer') as HTMLDivElement).classList.add('hide');
+        }
+
+        const chkEnableAllTunerHosts = page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement;
+        chkEnableAllTunerHosts.checked = Boolean(policy?.EnableAllTunerHosts);
+        triggerChange(chkEnableAllTunerHosts);
+    }, []);
+
+    const loadUser = useCallback((user: UserDto, mediaFolders: BaseItemDto[], channels: BaseItemDto[], devices: DeviceInfoDto[], tunerHosts: TunerHostInfo[]) => {
         void libraryMenu.then(menu => menu.setTitle(user.Name));
         loadChannels(user, channels);
         loadMediaFolders(user, mediaFolders);
         loadDevices(user, devices);
+        loadTunerHosts(user, tunerHosts);
         loading.hide();
-    }, [loadChannels, loadDevices, loadMediaFolders]);
+    }, [loadChannels, loadDevices, loadMediaFolders, loadTunerHosts]);
 
     const loadData = useCallback(() => {
         loading.show();
@@ -149,8 +197,9 @@ const Access = ({ userId }: AccessProps) => {
         }));
         const promise3 = window.ApiClient.getJSON(window.ApiClient.getUrl('Channels'));
         const promise4 = window.ApiClient.getJSON(window.ApiClient.getUrl('Devices'));
-        Promise.all([promise1, promise2, promise3, promise4]).then(function (responses) {
-            loadUser(responses[0], responses[1].Items, responses[2].Items, responses[3].Items);
+        const promise5 = window.ApiClient.getJSON(window.ApiClient.getUrl('LiveTv/TunerHosts'));
+        Promise.all([promise1, promise2, promise3, promise4, promise5]).then(function (responses) {
+            loadUser(responses[0], responses[1].Items, responses[2].Items, responses[3].Items, responses[4]);
         }).catch(err => {
             console.error('[userlibraryaccess] failed to load data', err);
         });
@@ -210,6 +259,13 @@ const Access = ({ userId }: AccessProps) => {
             }).map(function (c) {
                 return c.getAttribute('data-id');
             });
+            const tunerHostsPolicy = user.Policy as UserPolicyWithTunerHosts;
+            tunerHostsPolicy.EnableAllTunerHosts = (page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement).checked;
+            tunerHostsPolicy.EnabledTunerHostIds = tunerHostsPolicy.EnableAllTunerHosts ? [] : Array.prototype.filter.call(page.querySelectorAll('.chkTunerHost'), function (c) {
+                return c.checked;
+            }).map(function (c) {
+                return c.getAttribute('data-id');
+            });
             user.Policy.BlockedChannels = null;
             user.Policy.BlockedMediaFolders = null;
             window.ApiClient.updateUserPolicy(user.Id, user.Policy).then(function () {
@@ -234,6 +290,10 @@ const Access = ({ userId }: AccessProps) => {
 
         (page.querySelector('.chkEnableAllFolders') as HTMLInputElement).addEventListener('change', function (this: HTMLInputElement) {
             (page.querySelector('.folderAccessListContainer') as HTMLDivElement).classList.toggle('hide', this.checked);
+        });
+
+        (page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement).addEventListener('change', function (this: HTMLInputElement) {
+            (page.querySelector('.tunerHostAccessListContainer') as HTMLDivElement).classList.toggle('hide', this.checked);
         });
 
         (page.querySelector('.userLibraryAccessForm') as HTMLFormElement).addEventListener('submit', onSubmit);
@@ -308,6 +368,34 @@ const Access = ({ userId }: AccessProps) => {
                                 [
                                     Item.CustomName || Item.Name,
                                     Item.AppName
+                                ]
+                                    .filter(Boolean)
+                                    .join(' - ')
+                            }
+                            itemCheckedAttribute={Item.checkedAttribute}
+                        />
+                    ))}
+                </AccessContainer>
+
+                <AccessContainer
+                    containerClassName='tunerHostAccessContainer hide'
+                    headerTitle='HeaderTunerHostAccess'
+                    checkBoxClassName='chkEnableAllTunerHosts'
+                    checkBoxTitle='OptionEnableAccessToAllTunerHosts'
+                    listContainerClassName='tunerHostAccessListContainer'
+                    accessClassName='tunerHostAccess'
+                    listTitle='HeaderTunerDevices'
+                    description='TunerHostAccessHelp'
+                >
+                    {tunerHostsItems.map(Item => (
+                        <CheckBoxElement
+                            key={Item.Id}
+                            className='chkTunerHost'
+                            itemId={Item.Id}
+                            itemName={
+                                [
+                                    Item.Name,
+                                    Item.Url
                                 ]
                                     .filter(Boolean)
                                     .join(' - ')
