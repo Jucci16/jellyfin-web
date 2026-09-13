@@ -1,4 +1,4 @@
-import type { BaseItemDto, DeviceInfoDto, TunerHostInfo, UserDto, UserPolicy } from '@jellyfin/sdk/lib/generated-client';
+import type { BaseItemDto, DeviceInfoDto, TunerHostInfo, UserDto } from '@jellyfin/sdk/lib/generated-client';
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 
 import loading from 'components/loading/loading';
@@ -19,16 +19,6 @@ type ItemsArr = {
     CustomName?: string | null;
     Url?: string | null;
     checkedAttribute?: string
-};
-
-/**
- * The server's UserPolicy has EnableAllTunerHosts/EnabledTunerHostIds fields that are not yet
- * present in the published @jellyfin/sdk typings. This local extension can be dropped once the
- * SDK is regenerated against a server build that includes them.
- */
-type UserPolicyWithTunerHosts = UserPolicy & {
-    EnableAllTunerHosts?: boolean | null;
-    EnabledTunerHostIds?: string[] | null;
 };
 
 const Access = ({ userId }: AccessProps) => {
@@ -153,11 +143,10 @@ const Access = ({ userId }: AccessProps) => {
             return;
         }
 
-        const policy = user.Policy as UserPolicyWithTunerHosts | undefined;
         const itemsArr: ItemsArr[] = [];
 
         for (const tunerHost of tunerHosts) {
-            const isChecked = policy?.EnableAllTunerHosts || policy?.EnabledTunerHostIds?.indexOf(tunerHost.Id || '') != -1;
+            const isChecked = user.Policy?.EnableAllTunerHosts || user.Policy?.EnabledTunerHostIds?.indexOf(tunerHost.Id || '') != -1;
             const checkedAttribute = isChecked ? ' checked="checked"' : '';
             itemsArr.push({
                 Id: tunerHost.Id,
@@ -176,7 +165,7 @@ const Access = ({ userId }: AccessProps) => {
         }
 
         const chkEnableAllTunerHosts = page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement;
-        chkEnableAllTunerHosts.checked = Boolean(policy?.EnableAllTunerHosts);
+        chkEnableAllTunerHosts.checked = Boolean(user.Policy?.EnableAllTunerHosts);
         triggerChange(chkEnableAllTunerHosts);
     }, []);
 
@@ -259,9 +248,8 @@ const Access = ({ userId }: AccessProps) => {
             }).map(function (c) {
                 return c.getAttribute('data-id');
             });
-            const tunerHostsPolicy = user.Policy as UserPolicyWithTunerHosts;
-            tunerHostsPolicy.EnableAllTunerHosts = (page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement).checked;
-            tunerHostsPolicy.EnabledTunerHostIds = tunerHostsPolicy.EnableAllTunerHosts ? [] : Array.prototype.filter.call(page.querySelectorAll('.chkTunerHost'), function (c) {
+            user.Policy.EnableAllTunerHosts = (page.querySelector('.chkEnableAllTunerHosts') as HTMLInputElement).checked;
+            user.Policy.EnabledTunerHostIds = user.Policy.EnableAllTunerHosts ? [] : Array.prototype.filter.call(page.querySelectorAll('.chkTunerHost'), function (c) {
                 return c.checked;
             }).map(function (c) {
                 return c.getAttribute('data-id');
